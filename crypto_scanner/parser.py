@@ -219,8 +219,8 @@ def parse_certificate(pem: str):
         return {
             "issuer": cert.issuer.rfc4514_string(),
             "subject": cert.subject.rfc4514_string(),
-            "not_before": cert.not_valid_before,
-            "not_after": cert.not_valid_after,
+            "not_before": cert.not_valid_before_utc.strftime("%Y-%m-%d"),
+            "not_after": cert.not_valid_after_utc.strftime("%Y-%m-%d"),
             "signature_algorithm": cert.signature_algorithm_oid._name,
             "key_size": key_size
         }
@@ -246,6 +246,7 @@ def parse_openssl_output(raw: str) -> Dict[str, Any]:
         "key_size": None,
         "self_signed": False,
         "key_exchange": None,
+        "pfs_supported": False,
 
         # PQC detection
         "pqc_key_exchange": None,
@@ -348,7 +349,7 @@ def parse_openssl_output(raw: str) -> Dict[str, Any]:
 
         if m:
             result["cipher"] = m.group(1)
-
+    
 
     # =============================================================================
     # Classical key exchange detection
@@ -366,12 +367,20 @@ def parse_openssl_output(raw: str) -> Dict[str, Any]:
         elif "X448" in key and result["pqc_key_exchange"] is None:
             result["key_exchange"] = "X448"
 
-        elif "ECDH" in key and result["pqc_key_exchange"] is None:
+        elif "ECDH" in key or "ECDHE" in key:
             result["key_exchange"] = "ECDHE"
+
+        elif "X25519" in key:
+            result["key_exchange"] = "X25519"
+
+        elif "X448" in key:
+            result["key_exchange"] = "X448"
+
+        elif "DH" in key:
+            result["key_exchange"] = "DHE"
 
         elif "DH" in key and result["pqc_key_exchange"] is None:
             result["key_exchange"] = "DHE"
-
 
     # =============================================================================
     # Key size
@@ -450,6 +459,16 @@ def parse_openssl_output(raw: str) -> Dict[str, Any]:
     if "self signed" in raw.lower():
         result["self_signed"] = True
 
+    
+    # =============================================================================
+    # Perfect Forward Secrecy detection
+    # =============================================================================
+
+    if result["tls_version"] == "TLSv1.3":
+        result["pfs_supported"] = True
+
+    elif result["key_exchange"] in ["ECDHE", "DHE", "X25519", "X448", "HYBRID_PQC"]:
+        result["pfs_supported"] = True
 
     return result
 

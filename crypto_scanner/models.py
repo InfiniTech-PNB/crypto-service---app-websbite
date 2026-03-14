@@ -180,16 +180,6 @@ class ScanResult(BaseModel):
         description="Whether certificate is self-signed",
     )
 
-    # ------------------------------------------------------------------
-    # Optional: PQC readiness score (for ML)
-    # ------------------------------------------------------------------
-
-    pqc_ready_score: Optional[float] = Field(
-        None,
-        description="Post-quantum readiness score (0.0–1.0)",
-    )
-
-
 # -----------------------------------------------------------------------------
 # API response
 # -----------------------------------------------------------------------------

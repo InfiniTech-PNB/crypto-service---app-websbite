@@ -197,10 +197,12 @@ def _merge_results(
     # ------------------------------------------------------------------
 
     pfs = (
-        testssl.get("pfs_supported", False)
+        openssl.get("pfs_supported", False)
+        or testssl.get("pfs_supported", False)
         or nmap.get("pfs_supported", False)
     )
 
+    # fallback detection from cipher suites
     if not pfs:
         for cipher in cipher_list:
             if has_pfs(cipher):
@@ -208,6 +210,7 @@ def _merge_results(
                 break
 
     result["pfs_supported"] = pfs
+
 
     # ------------------------------------------------------------------
     # Vulnerabilities
