@@ -29,7 +29,7 @@ Post-Quantum Cryptography (PQC) Readiness Scanner for discovering domain assets 
 ## 🛠️ Technology Stack
 
 ### Backend
-- **Language**: Python 3.10+
+- **Language**: Python 3.12.8
 - **Framework**: FastAPI
 - **System Tools**: Nmap, OpenSSL, git, curl
 - **Security Tools**: testssl.sh
