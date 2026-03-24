@@ -115,6 +115,6 @@ Swagger API docs will be available at `http://localhost:8000/docs`
 
 ## 👤 Team Information
 This service is part of the KavachAI project.
-# Team: InfiniTech
+Team: InfiniTech
 
 ---
