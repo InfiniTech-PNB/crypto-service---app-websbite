@@ -55,7 +55,7 @@ crypto-service/
 ## ⚙️ Setup & Installation
 
 ### Prerequisites
-- Python >= 3.10
+- Python >= 3.12.8
 - System Tools: `nmap`, `openssl`, `git`, `curl`
   - Ubuntu / Debian: `sudo apt install nmap openssl git curl`
   - MacOS: `brew install nmap openssl`
