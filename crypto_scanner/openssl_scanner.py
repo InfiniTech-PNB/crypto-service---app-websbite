@@ -1,77 +1,66 @@
 # =============================================================================
-# openssl_scanner.py — OpenSSL TLS Scanner (PQC + Classical Fallback)
+# openssl_scanner.py — Correct PQC + Classical Scanner
 # =============================================================================
 
 import subprocess
 import logging
 from typing import Dict, Any
 
-from crypto_scanner.parser import parse_openssl_output
-
 logger = logging.getLogger("scanner")
 
 OPENSSL_TIMEOUT = 15
 
-# -----------------------------------------------------------------------------
-# PQC hybrid groups (OpenSSL + OQS supported groups)
-# -----------------------------------------------------------------------------
-
-PQC_GROUPS = ":".join([
-    "X25519MLKEM512",
-    "X25519MLKEM768",
-    "X25519MLKEM1024",
-    "P256MLKEM512",
-    "P384MLKEM768"
-])
-
 
 # -----------------------------------------------------------------------------
-# Run OpenSSL command
+# Single scan (classical or PQC)
 # -----------------------------------------------------------------------------
 
-def _run_openssl(cmd):
+def _run_single_scan(host: str, port: int, use_oqs: bool, tls_flag: str = None):
 
-    process = subprocess.run(
-        cmd,
-        input=b"Q\n",
-        capture_output=True,
-        timeout=OPENSSL_TIMEOUT,
-        shell=False
-    )
+    cmd = [
+        "openssl",
+        "s_client",
+        "-connect", f"{host}:{port}",
+        "-servername", host,
+        "-showcerts",
+        "-alpn", "h2,http/1.1",
+        "-status"
+    ]
+    
+    if tls_flag:
+        cmd.append(tls_flag)
 
-    raw_output = ""
+    # Enable OQS via environment (IMPORTANT)
+    env = None
+    if use_oqs:
+        env = {"OPENSSL_CONF": "/etc/ssl/oqs.cnf"}  # adjust path if needed
 
-    if process.stdout:
-        raw_output += process.stdout.decode("utf-8", errors="replace")
+    try:
+        process = subprocess.run(
+            cmd,
+            input=b"Q\n",
+            capture_output=True,
+            timeout=OPENSSL_TIMEOUT,
+            shell=False,
+            env=env
+        )
 
-    if process.stderr:
-        raw_output += process.stderr.decode("utf-8", errors="replace")
+        raw_output = ""
+        if process.stdout:
+            raw_output += process.stdout.decode("utf-8", errors="replace")
+        if process.stderr:
+            raw_output += process.stderr.decode("utf-8", errors="replace")
 
-    return raw_output
+        return raw_output, None
 
-
-# -----------------------------------------------------------------------------
-# Detect PQC signatures inside raw output
-# -----------------------------------------------------------------------------
-
-def _detect_pqc_signatures(raw: str, result: Dict[str, Any]):
-
-    lower = raw.lower()
-
-    if "dilithium" in lower:
-        result["pqc_signature"] = "Dilithium"
-
-    elif "falcon" in lower:
-        result["pqc_signature"] = "Falcon"
-
-    elif "sphincs" in lower:
-        result["pqc_signature"] = "SPHINCS+"
-
-    return result
+    except subprocess.TimeoutExpired:
+        return "", "Connection timed out"
+    except Exception as e:
+        return "", str(e)
 
 
 # -----------------------------------------------------------------------------
-# Main scanner
+# Main function
 # -----------------------------------------------------------------------------
 
 def run_openssl_scan(host: str, ip: str, port: int) -> Dict[str, Any]:
@@ -79,135 +68,39 @@ def run_openssl_scan(host: str, ip: str, port: int) -> Dict[str, Any]:
     logger.info("[OpenSSL] Scanning %s (%s:%d)", host, ip, port)
 
     try:
+        # -----------------------------
+        # 1. Classical scan (Default)
+        # -----------------------------
+        classical_raw, error = _run_single_scan(host, port, use_oqs=False)
 
-        # ------------------------------------------------------------------
-        # 1️⃣ PQC probe
-        # ------------------------------------------------------------------
+        # -----------------------------
+        # 2. Fallback to TLS 1.2?
+        # -----------------------------
+        # If handshake fails (detect (NONE) or empty output with no error)
+        if not classical_raw or "Cipher is (NONE)" in classical_raw or "handshake failure" in (classical_raw or "").lower():
+            logger.info("[OpenSSL] Handshake failed or (NONE) cipher for %s. Retrying with TLS 1.2...", host)
+            classical_raw_f2, error_f2 = _run_single_scan(host, port, use_oqs=False, tls_flag="-tls1_2")
+            
+            # If fallback produced something better, use it
+            if classical_raw_f2 and "Cipher is (NONE)" not in classical_raw_f2:
+                classical_raw = classical_raw_f2
+                error = error_f2
 
-        pqc_cmd = [
-            "openssl",
-            "s_client",
-            "-connect", f"{host}:{port}",
-            "-servername", host,
-            "-groups", PQC_GROUPS,
-            "-showcerts"
-        ]
+        # -----------------------------
+        # 3. PQC scan (OQS enabled)
+        # -----------------------------
+        pqc_raw, _ = _run_single_scan(host, port, use_oqs=True)
 
-        raw_output = _run_openssl(pqc_cmd)
-
-        if raw_output:
-
-            result = parse_openssl_output(raw_output)
-
-            # Detect PQC signatures
-            result = _detect_pqc_signatures(raw_output, result)
-
-            # Accept PQC only if negotiated
-            if "Server Temp Key:" in raw_output and result.get("pqc_key_exchange"):
-
-                logger.info(
-                    "[OpenSSL] PQC negotiated: %s",
-                    result.get("pqc_key_exchange")
-                )
-
-                result["hybrid_pqc"] = True
-
-                return result
-
-        # ------------------------------------------------------------------
-        # 2️⃣ Classical TLS fallback
-        # ------------------------------------------------------------------
-
-        logger.info("[OpenSSL] PQC not negotiated — running classical scan")
-
-        normal_cmd = [
-            "openssl",
-            "s_client",
-            "-connect", f"{host}:{port}",
-            "-servername", host,
-            "-showcerts"
-        ]
-
-        raw_output = _run_openssl(normal_cmd)
-
-        if not raw_output.strip():
-
-            logger.warning(
-                "[OpenSSL] No output for %s:%d", ip, port
-            )
-
-            return _empty_result()
-
-        logger.info("[OpenSSL RAW]\n%s", raw_output)
-
-        result = parse_openssl_output(raw_output)
-
-        # Detect PQC signatures even if key exchange isn't PQC
-        result = _detect_pqc_signatures(raw_output, result)
-
-        if result.get("pqc_signature"):
-            result["hybrid_pqc"] = True
-
-        logger.info(
-            "[OpenSSL] %s:%d → TLS=%s Cipher=%s KeyEx=%s Sig=%s KeySize=%s",
-            ip,
-            port,
-            result.get("tls_version"),
-            result.get("cipher"),
-            result.get("key_exchange"),
-            result.get("signature_algorithm"),
-            result.get("key_size")
-        )
-
-        return result
-
-    except FileNotFoundError:
-
-        logger.error(
-            "[OpenSSL] openssl binary not found — install OpenSSL"
-        )
-
-        return _empty_result()
-
-    except subprocess.TimeoutExpired:
-
-        logger.warning(
-            "[OpenSSL] Timeout (%ds) for %s:%d",
-            OPENSSL_TIMEOUT,
-            ip,
-            port
-        )
-
-        return _empty_result()
+        return {
+            "classical_raw": classical_raw,
+            "oqs_raw": pqc_raw,
+            "error_msg": error
+        }
 
     except Exception as e:
-
-        logger.error(
-            "[OpenSSL] Unexpected error for %s:%d: %s",
-            ip,
-            port,
-            str(e)
-        )
-
-        return _empty_result()
-
-
-# -----------------------------------------------------------------------------
-# Empty result template
-# -----------------------------------------------------------------------------
-
-def _empty_result() -> Dict[str, Any]:
-
-    return {
-        "tls_version": None,
-        "cipher": None,
-        "issuer": None,
-        "expires": None,
-        "signature_algorithm": None,
-        "key_size": None,
-        "self_signed": False,
-        "key_exchange": None,
-        "pqc_key_exchange": None,
-        "pqc_signature": None,
-        "hybrid_pqc": False
-    }
+        logger.error("[OpenSSL] Error for %s:%d: %s", ip, port, str(e))
+        return {
+            "classical_raw": "",
+            "oqs_raw": "",
+            "error_msg": str(e)
+        }

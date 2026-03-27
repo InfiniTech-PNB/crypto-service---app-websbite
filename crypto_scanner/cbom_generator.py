@@ -1,5 +1,5 @@
 # =============================================================================
-# cbom_generator.py — CERT-IN CBOM Generator
+# cbom_generator.py — FINAL FRONTEND-READY VERSION
 # =============================================================================
 
 from typing import Dict, Any, List
@@ -7,226 +7,275 @@ import uuid
 
 
 # -----------------------------------------------------------------------------
-# Algorithm metadata database
+# Algorithm metadata
 # -----------------------------------------------------------------------------
 
 ALGORITHM_DB = {
-
-    "AES_128_GCM": {
-        "primitive": "AES",
-        "mode": "GCM",
-        "security_level": "128",
-        "oid": "2.16.840.1.101.3.4.1.6"
-    },
-
-    "AES_256_GCM": {
-        "primitive": "AES",
-        "mode": "GCM",
-        "security_level": "256",
-        "oid": "2.16.840.1.101.3.4.1.46"
-    },
-
-    "ECDHE": {
-        "primitive": "Elliptic Curve Diffie Hellman",
-        "mode": None,
-        "security_level": "128",
-        "oid": "1.3.132.112"
-    },
-
-    "RSA": {
-        "primitive": "RSA",
-        "mode": None,
-        "security_level": "112-128",
-        "oid": "1.2.840.113549.1.1.1"
-    },
-
-    "MLKEM768": {
-        "primitive": "Lattice KEM",
-        "mode": None,
-        "security_level": "NIST Level 3",
-        "oid": "2.16.840.1.101.3.4.4.2"
-    },
-
-    "CHACHA20_POLY1305": {
-        "primitive": "ChaCha20",
-        "mode": "Poly1305",
-        "security_level": "256",
-        "oid": None
-    },
-
-    "X25519": {
-        "primitive": "Elliptic Curve Diffie Hellman",
-        "mode": None,
-        "security_level": "128",
-        "oid": "1.3.101.110"
-    }
+    "AES_128_GCM": {"primitive": "AES", "mode": "GCM", "security_level": "128"},
+    "AES_256_GCM": {"primitive": "AES", "mode": "GCM", "security_level": "256"},
+    "CHACHA20_POLY1305": {"primitive": "ChaCha20", "mode": "Poly1305", "security_level": "256"},
+    "X25519": {"primitive": "Elliptic Curve Diffie Hellman", "mode": None, "security_level": "128"},
+    "RSA": {"primitive": "RSA", "mode": None, "security_level": "112-128"},
+    "ECDSA": {"primitive": "Elliptic Curve Digital Signature Algorithm", "mode": None, "security_level": "128"},
 }
 
 
 # -----------------------------------------------------------------------------
-# Cipher suite parser
+# Cipher parser
 # -----------------------------------------------------------------------------
-def parse_cipher_suite(cipher: str):
 
-    """
-    Supports both TLS 1.2 and TLS 1.3 cipher formats.
-    """
-
+def parse_cipher(cipher: str):
     if not cipher:
         return None
 
-    cipher = cipher.replace("TLS_", "")
+    if "AES_256_GCM" in cipher:
+        return "AES_256_GCM"
+    if "AES_128_GCM" in cipher:
+        return "AES_128_GCM"
+    if "CHACHA20_POLY1305" in cipher:
+        return "CHACHA20_POLY1305"
 
-    # TLS 1.3 format
-    # Example: AES_128_GCM_SHA256
-    if "_WITH_" not in cipher:
+    return None
 
-        parts = cipher.split("_")
-
-        if len(parts) >= 3:
-
-            cipher_algo = "_".join(parts[:3])
-
-            return {
-                "key_exchange": None,
-                "authentication": None,
-                "cipher": cipher_algo
-            }
-
-        return None
-
-    # TLS 1.2 format
-    parts = cipher.split("_WITH_")
-
-    key_auth = parts[0].split("_")
-
-    key_exchange = key_auth[0]
-
-    authentication = key_auth[1] if len(key_auth) > 1 else None
-
-    cipher_hash = parts[1].split("_")
-
-    cipher_algo = "_".join(cipher_hash[:3])
-
-    return {
-        "key_exchange": key_exchange,
-        "authentication": authentication,
-        "cipher": cipher_algo
-    }
 
 # -----------------------------------------------------------------------------
-# Algorithms section
+# Algorithms
 # -----------------------------------------------------------------------------
 
 def derive_algorithms(scan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    negotiated = scan.get("negotiated", {})
+    cert = scan.get("certificate", {})
 
     algorithms = []
+    seen = set()
 
-    cipher = scan.get("cipher")
+    def add(name, asset_type):
+        if not name or name in seen:
+            return
 
-    parsed = parse_cipher_suite(cipher) if cipher else None
+        meta = ALGORITHM_DB.get(name, {
+            "primitive": "Unknown",
+            "mode": None,
+            "security_level": "Unknown"
+        })
 
-    if parsed:
+        algorithms.append({
+            "name": name,
+            "asset_type": asset_type,
+            "primitive": meta["primitive"],
+            "mode": meta["mode"],
+            "classical_security_level": meta["security_level"],
+            "oid": None
+        })
 
-        cipher_name = parsed["cipher"]
+        seen.add(name)
 
-        if cipher_name in ALGORITHM_DB:
-
-            meta = ALGORITHM_DB[cipher_name]
-
-            algorithms.append({
-                "name": cipher_name,
-                "asset_type": "cipher",
-                "primitive": meta["primitive"],
-                "mode": meta["mode"],
-                "classical_security_level": meta["security_level"],
-                "oid": meta["oid"]
-            })
-
-        kex = parsed["key_exchange"]
-
-        if kex in ALGORITHM_DB:
-
-            meta = ALGORITHM_DB[kex]
-
-            algorithms.append({
-                "name": kex,
-                "asset_type": "key_exchange",
-                "primitive": meta["primitive"],
-                "mode": meta["mode"],
-                "classical_security_level": meta["security_level"],
-                "oid": meta["oid"]
-            })
+    add(parse_cipher(negotiated.get("cipher")), "cipher")
+    add(negotiated.get("key_exchange"), "key_exchange")
+    add(cert.get("signature_algorithm"), "signature")
 
     return algorithms
 
 
 # -----------------------------------------------------------------------------
-# Keys section
+# Keys (DEDUP FRIENDLY)
 # -----------------------------------------------------------------------------
 
 def derive_keys(scan: Dict[str, Any]):
+    negotiated = scan.get("negotiated", {})
+    cert = scan.get("certificate", {})
 
-    key_id = str(uuid.uuid4())
+    keys = []
 
-    return [{
-        "name": scan.get("key_exchange"),
-        "asset_type": "TLS Key",
-        "id": key_id,
+    # Stable ID instead of UUID
+    kex_name = negotiated.get("key_exchange")
+    kex_size = negotiated.get("server_temp_key_size")
+    kex_id = f"{kex_name}-{kex_size}"
+
+    keys.append({
+        "name": kex_name,
+        "asset_type": "ephemeral_key",
+        "id": kex_id,
         "state": "active",
-        "size": scan.get("key_size"),
+        "size": kex_size,
         "creation_date": "unknown",
         "activation_date": "unknown"
-    }]
+    })
+
+    pub = cert.get("public_key", {})
+    pub_type = pub.get("type")
+    pub_size = pub.get("size")
+
+    pub_id = f"{pub_type}-{pub_size}"
+
+    keys.append({
+        "name": f"{pub_type} Public Key",
+        "asset_type": "public_key",
+        "id": pub_id,
+        "state": "active",
+        "size": pub_size,
+        "creation_date": cert.get("not_before"),
+        "activation_date": cert.get("not_before")
+    })
+
+    return keys, pub_id
 
 
 # -----------------------------------------------------------------------------
-# Protocols section
+# Protocols
 # -----------------------------------------------------------------------------
 
 def derive_protocols(scan: Dict[str, Any]):
+    negotiated = scan.get("negotiated", {})
 
     return [{
         "name": "TLS",
-        "version": scan.get("tls_version"),
-        "cipher_suites": scan.get("cipher_suites"),
+        "version": negotiated.get("tls_version"),
+        "cipher_suites": [negotiated.get("cipher")],
+        "alpn": negotiated.get("alpn"),
         "oid": None
     }]
 
 
 # -----------------------------------------------------------------------------
-# Certificates section
+# Certificates (STRUCTURED)
 # -----------------------------------------------------------------------------
 
-def derive_certificates(scan: Dict[str, Any]):
+def derive_certificates(scan: Dict[str, Any], pub_key_id: str):
+    cert = scan.get("certificate", {})
 
-    return [{
-        "name": scan.get("host"),
-        "subject_name": scan.get("host"),
-        "issuer_name": scan.get("issuer"),
-        "validity_period": scan.get("expires"),
-        "signature_algorithm_reference": scan.get("signature_algorithm"),
-        "subject_public_key_reference": scan.get("key_size"),
+    leaf = {
+        "subject_name": cert.get("subject"),
+        "issuer_name": cert.get("issuer"),
+        "validity_period": {
+            "not_before": cert.get("not_before"),
+            "not_after": cert.get("expires")
+        },
+        "signature_algorithm_reference": cert.get("signature_algorithm"),
+        "subject_public_key_reference": pub_key_id,
         "certificate_format": "X509",
-        "certificate_extension": None
-    }]
-
-
-# -----------------------------------------------------------------------------
-# Main CBOM generator
-# -----------------------------------------------------------------------------
-
-def generate_cbom(scan_result: Dict[str, Any]):
-
-    cbom = {
-
-        "algorithms": derive_algorithms(scan_result),
-
-        "keys": derive_keys(scan_result),
-
-        "protocols": derive_protocols(scan_result),
-
-        "certificates": derive_certificates(scan_result)
+        "certificate_extension": cert.get("extensions"),
+        "certificate_history": cert.get("certificate_history", []),
+        "fingerprint_sha256": cert.get("fingerprint_sha256")
     }
 
-    return cbom
+    chain = []
+    for c in cert.get("certificate_chain", []):
+        chain.append({
+            "subject": c.get("subject"),
+            "issuer": c.get("issuer"),
+            "fingerprint_sha256": c.get("fingerprint_sha256"),
+            "is_chain_certificate": True
+        })
+
+    return {
+        "leaf": leaf,
+        "chain": chain
+    }
+
+
+# -----------------------------------------------------------------------------
+# MAIN GENERATOR
+# -----------------------------------------------------------------------------
+
+def generate_cbom(scan_results: Dict[str, Any], mode: str = "per_asset"):
+
+    results = scan_results.get("results", [scan_results])
+
+    # ---------------- PER ASSET ----------------
+
+    if mode == "per_asset":
+        cboms = []
+        failed_assets = []
+
+        for res in results:
+            if hasattr(res, "model_dump"):
+                res = res.model_dump()
+
+            if res.get("status") != "success":
+                failed_assets.append({
+                    "host": res.get("host"),
+                    "reason": res.get("failure_reason")
+                })
+                continue
+
+            keys, pub_id = derive_keys(res)
+            certs = derive_certificates(res, pub_id)
+
+            cboms.append({
+                "asset": res.get("host"),
+                "algorithms": derive_algorithms(res),
+                "keys": keys,
+                "protocols": derive_protocols(res),
+                "certificates": [
+                    {
+                        "asset": res.get("host"),
+                        "leaf_certificate": certs["leaf"],
+                        "certificate_chain": certs["chain"]
+                    }
+                ]
+            })
+
+        return {
+            "assets": cboms,
+            "failed_assets": failed_assets
+        }
+
+    # ---------------- AGGREGATE ----------------
+
+    agg = {
+        "assets": [],
+        "algorithms": [],
+        "keys": [],
+        "protocols": [],
+        "certificates": [],
+        "failed_assets": []
+    }
+
+    seen_algo = set()
+    seen_proto = set()
+    seen_keys = set()
+
+    for res in results:
+        if hasattr(res, "model_dump"):
+            res = res.model_dump()
+
+        if res.get("status") != "success":
+            agg["failed_assets"].append({
+                "host": res.get("host"),
+                "reason": res.get("failure_reason")
+            })
+            continue
+
+        agg["assets"].append(res.get("host"))
+
+        keys, pub_id = derive_keys(res)
+        certs = derive_certificates(res, pub_id)
+
+        # Algorithms
+        for a in derive_algorithms(res):
+            if a["name"] not in seen_algo:
+                agg["algorithms"].append(a)
+                seen_algo.add(a["name"])
+
+        # Keys (DEDUP)
+        for k in keys:
+            if k["id"] not in seen_keys:
+                agg["keys"].append(k)
+                seen_keys.add(k["id"])
+
+        # Protocols
+        for p in derive_protocols(res):
+            key = (p["version"], p["cipher_suites"][0], p["alpn"])
+            if key not in seen_proto:
+                agg["protocols"].append(p)
+                seen_proto.add(key)
+
+        # Certificates (GROUPED PER ASSET)
+        agg["certificates"].append({
+            "asset": res.get("host"),
+            "leaf_certificate": certs["leaf"],
+            "certificate_chain": certs["chain"]
+        })
+
+    return agg

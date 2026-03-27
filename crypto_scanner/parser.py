@@ -8,467 +8,350 @@ from datetime import datetime
 from typing import Dict, Any
 
 from cryptography import x509
+from cryptography.x509.oid import ExtensionOID
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import rsa, ec
+from cryptography.hazmat.primitives import hashes
 
 logger = logging.getLogger("scanner")
-
-
-# =============================================================================
-# Weak cipher patterns
-# =============================================================================
-
-WEAK_CIPHER_PATTERNS = [
-    "RC4",
-    "3DES",
-    "DES",
-    "NULL",
-    "EXPORT",
-    "anon",
-    "MD5"
-]
-
-
-# =============================================================================
-# PQC Algorithms
-# =============================================================================
-
-PQC_KEY_EXCHANGE = [
-
-    # Kyber (older naming)
-    "KYBER",
-    "KYBER512",
-    "KYBER768",
-    "KYBER1024",
-
-    # ML-KEM (NIST standardized Kyber)
-    "MLKEM",
-    "MLKEM512",
-    "MLKEM768",
-    "MLKEM1024",
-
-    # Hybrid PQC TLS groups
-    "X25519MLKEM",
-    "X25519MLKEM512",
-    "X25519MLKEM768",
-    "X25519MLKEM1024",
-
-    "SECP256R1MLKEM768",
-    "SECP384R1MLKEM1024"
-]
-
-
-PQC_SIGNATURES = [
-
-    "DILITHIUM",
-    "DILITHIUM2",
-    "DILITHIUM3",
-    "DILITHIUM5",
-
-    "FALCON",
-    "FALCON512",
-    "FALCON1024",
-
-    "SPHINCS",
-    "SPHINCS+"
-]
-
 
 # =============================================================================
 # TLS / SSL normalization
 # =============================================================================
 
 _TLS_MAP = {
-
     "tlsv1": "TLSv1.0",
     "tlsv1.0": "TLSv1.0",
     "tls1.0": "TLSv1.0",
-
     "tlsv1.1": "TLSv1.1",
     "tls1.1": "TLSv1.1",
-
     "tlsv1.2": "TLSv1.2",
     "tls1.2": "TLSv1.2",
-
     "tlsv1.3": "TLSv1.3",
     "tls1.3": "TLSv1.3",
-
     "sslv2": "SSLv2",
     "ssl2": "SSLv2",
-
     "sslv3": "SSLv3",
     "ssl3": "SSLv3"
 }
-
 
 # =============================================================================
 # Signature algorithm normalization
 # =============================================================================
 
 _SIG_MAP = {
-
     "sha256withrsaencryption": "RSA",
     "sha384withrsaencryption": "RSA",
     "sha512withrsaencryption": "RSA",
-
     "rsaencryption": "RSA",
     "rsa": "RSA",
-
     "ecdsa-with-sha256": "ECDSA",
     "ecdsa-with-sha384": "ECDSA",
     "ecdsa": "ECDSA",
-
     "ed25519": "Ed25519",
     "ed448": "Ed448"
 }
-
 
 # =============================================================================
 # Helper functions
 # =============================================================================
 
 def normalize_tls(version: str) -> str:
-
     key = version.lower().replace(" ", "")
     return _TLS_MAP.get(key, version.strip())
 
 
 def normalize_sig(sig: str) -> str:
-
     key = sig.lower()
     return _SIG_MAP.get(key, sig.strip())
 
 
 def parse_date(raw: str) -> str:
-
     formats = [
         "%b %d %H:%M:%S %Y %Z",
         "%b  %d %H:%M:%S %Y %Z",
         "%b %d %H:%M:%S %Y"
     ]
-
     for f in formats:
-
         try:
             dt = datetime.strptime(raw.strip(), f)
             return dt.strftime("%Y-%m-%d")
-
         except Exception:
             pass
-
     return raw.strip()
 
 
-def is_weak_cipher(cipher: str) -> bool:
-
-    up = cipher.upper()
-
-    for p in WEAK_CIPHER_PATTERNS:
-        if p in up:
-            return True
-
-    return False
-
-
-def has_pfs(cipher: str) -> bool:
-
-    up = cipher.upper()
-
-    if "ECDHE" in up:
-        return True
-
-    if "DHE" in up:
-        return True
-
-    return False
-
-
-def extract_certificate_pem(raw: str):
-
-    match = re.search(
-        r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----",
-        raw,
-        re.S
-    )
-
-    if not match:
-        return None
-
-    return (
-        "-----BEGIN CERTIFICATE-----"
-        + match.group(1)
-        + "-----END CERTIFICATE-----"
-    )
-
-
 def parse_certificate(pem: str):
-
     try:
-
         cert = x509.load_pem_x509_certificate(
             pem.encode(),
             default_backend()
         )
-
+        
         public_key = cert.public_key()
+        pk_info = {"type": "Unknown", "size": None}
+        
+        if isinstance(public_key, rsa.RSAPublicKey):
+            pk_info["type"] = "RSA"
+            pk_info["size"] = public_key.key_size
+        elif isinstance(public_key, ec.EllipticCurvePublicKey):
+            pk_info["type"] = "EC"
+            pk_info["size"] = public_key.curve.key_size
+        elif hasattr(public_key, "key_size"):
+            pk_info["size"] = public_key.key_size
 
-        key_size = None
+        san_list = []
+        try:
+            san_ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+            sans = san_ext.value.get_values_for_type(x509.DNSName)
+            san_list = [str(san) for san in sans]
+        except x509.ExtensionNotFound:
+            pass
 
-        if hasattr(public_key, "key_size"):
-            key_size = public_key.key_size
+        extensions = {
+            "key_usage": [],
+            "extended_key_usage": [],
+            "basic_constraints": {}
+        }
+        
+        try:
+            ku = cert.extensions.get_extension_for_oid(ExtensionOID.KEY_USAGE).value
+            key_usage_list = []
+            if ku.digital_signature: key_usage_list.append("Digital Signature")
+            if ku.content_commitment: key_usage_list.append("Content Commitment")
+            if ku.key_encipherment: key_usage_list.append("Key Encipherment")
+            if ku.data_encipherment: key_usage_list.append("Data Encipherment")
+            if ku.key_agreement: key_usage_list.append("Key Agreement")
+            if ku.key_cert_sign: key_usage_list.append("Key Cert Sign")
+            if ku.crl_sign: key_usage_list.append("CRL Sign")
+            extensions["key_usage"] = key_usage_list
+        except x509.ExtensionNotFound:
+            pass
+            
+        try:
+            eku = cert.extensions.get_extension_for_oid(ExtensionOID.EXTENDED_KEY_USAGE).value
+            extensions["extended_key_usage"] = [oid._name for oid in eku]
+        except x509.ExtensionNotFound:
+            pass
+            
+        try:
+            bc = cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS).value
+            extensions["basic_constraints"] = {
+                "ca": bc.ca,
+                "path_length": bc.path_length
+            }
+        except x509.ExtensionNotFound:
+            pass
 
         return {
             "issuer": cert.issuer.rfc4514_string(),
             "subject": cert.subject.rfc4514_string(),
+            "san": san_list,
+            "san_count": len(san_list),
             "not_before": cert.not_valid_before_utc.strftime("%Y-%m-%d"),
             "not_after": cert.not_valid_after_utc.strftime("%Y-%m-%d"),
-            "signature_algorithm": cert.signature_algorithm_oid._name,
-            "key_size": key_size
+            "raw_signature_algorithm": cert.signature_algorithm_oid._name,
+            "signature_algorithm": normalize_sig(cert.signature_algorithm_oid._name),
+            "fingerprint_sha256": cert.fingerprint(hashes.SHA256()).hex(),
+            "public_key": pk_info,
+            "extensions": extensions
         }
 
     except Exception as e:
-
         logger.warning("Certificate parsing failed: %s", e)
-
         return {}
+
 
 # =============================================================================
 # OpenSSL parser
 # =============================================================================
 
-def parse_openssl_output(raw: str) -> Dict[str, Any]:
+def parse_openssl_output(raw: str, error_msg: str = None) -> Dict[str, Any]:
+    # -------------------------------------------------------------------------
+    # 1. Detect Handshake Failure / Blocked
+    # -------------------------------------------------------------------------
+    status = "success"
+    failure_reason = None
+    
+    raw_lower = (raw or "").lower()
+    error_lower = (error_msg or "").lower()
 
-    result = {
-        "tls_version": None,
-        "cipher": None,
-        "issuer": None,
-        "expires": None,
-        "signature_algorithm": None,
-        "key_size": None,
-        "self_signed": False,
-        "key_exchange": None,
-        "pfs_supported": False,
+    # Blocked logic
+    if "timeout" in error_lower or "reset" in error_lower:
+        status = "blocked"
+        failure_reason = error_msg or "Connection timed out"
+    elif not raw or "cipher is (none)" in raw or "handshake failure" in raw_lower or "no peer certificate" in raw_lower:
+        status = "failed"
+        if "handshake failure" in raw_lower:
+            failure_reason = "TLS handshake failure (mismatch)"
+        elif "no peer certificate" in raw_lower:
+            failure_reason = "No peer certificate provided"
+        elif "cipher is (none)" in raw:
+            failure_reason = "Negotiated cipher is (NONE)"
+        elif error_msg:
+            failure_reason = error_msg
+        else:
+            failure_reason = "TLS handshake failed or blocked"
 
-        # PQC detection
-        "pqc_key_exchange": None,
-        "pqc_signature": None,
-        "hybrid_pqc": False
+    if status != "success":
+        return {
+            "status": status,
+            "failure_reason": failure_reason,
+            "negotiated": None,
+            "certificate": None,
+            "pqc": None,
+            "supported": None
+        }
+
+    # -------------------------------------------------------------------------
+    # 2. Success Path (Existing logic)
+    # -------------------------------------------------------------------------
+    result: Dict[str, Any] = {
+        "status": "success",
+        "failure_reason": None,
+        "negotiated": {
+            "tls_version": None,
+            "cipher": None,
+            "server_temp_key": None,
+            "server_temp_key_size": None,
+            "alpn": None,
+            "session_reused": False,
+            "ocsp": {
+                "supported": False,
+                "stapled": False,
+            }
+        },
+        "certificate": {
+            "subject": None,
+            "san": [],
+            "san_count": 0,
+            "issuer": None,
+            "not_before": None,
+            "expires": None,
+            "raw_signature_algorithm": None,
+            "signature_algorithm": None,
+            "fingerprint_sha256": None,
+            "public_key": None,
+            "self_signed": False,
+            "extensions": {
+                "key_usage": [],
+                "extended_key_usage": [],
+                "basic_constraints": {}
+            },
+            "certificate_chain": []
+        }
     }
 
-    if not raw:
-        return result
+    # Certificate Information (Leaf + Chain)
+    pems = re.findall(
+        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+        raw,
+        re.S
+    )
 
-    # --------------------------------------------------------------
-    # Extract certificate information
-    # --------------------------------------------------------------
-
-    pem = extract_certificate_pem(raw)
-
-    if pem:
-
-        cert_info = parse_certificate(pem)
-
+    if pems:
+        # First one is the leaf certificate
+        cert_info = parse_certificate(pems[0])
+        if cert_info.get("subject"):
+            result["certificate"]["subject"] = cert_info["subject"]
         if cert_info.get("issuer"):
-            result["issuer"] = cert_info.get("issuer")
-
+            result["certificate"]["issuer"] = cert_info["issuer"]
+        if cert_info.get("san"):
+            result["certificate"]["san"] = cert_info["san"]
+        if cert_info.get("san_count") is not None:
+            result["certificate"]["san_count"] = cert_info["san_count"]
+        if cert_info.get("not_before"):
+            result["certificate"]["not_before"] = cert_info["not_before"]
         if cert_info.get("not_after"):
-            result["expires"] = str(cert_info.get("not_after"))
-
+            result["certificate"]["expires"] = cert_info["not_after"]
         if cert_info.get("signature_algorithm"):
-            result["signature_algorithm"] = cert_info.get("signature_algorithm")
-
-        if cert_info.get("key_size"):
-            result["key_size"] = cert_info.get("key_size")
-
-
-    raw_upper = raw.upper()
-
-    # =============================================================================
-    # PQC detection (GLOBAL SCAN)
-    # =============================================================================
-
-    for algo in PQC_KEY_EXCHANGE:
-
-        if algo in raw_upper:
-
-            result["pqc_key_exchange"] = algo
-
-            if "MLKEM" in algo and (
-                "X25519" in algo
-                or "SECP" in algo
-                or "P256" in algo
-                or "P384" in algo
-            ):
-                result["hybrid_pqc"] = True
-                result["key_exchange"] = "HYBRID_PQC"
-            else:
-                result["key_exchange"] = algo
-
-            break
-
-    for algo in PQC_SIGNATURES:
-
-        if algo in raw_upper:
-            result["pqc_signature"] = algo
-            result["signature_algorithm"] = algo
-            break
-
-
-    # =============================================================================
-    # TLS / SSL version
-    # =============================================================================
-
-    m = re.search(r"Protocol\s*:\s*((?:TLS|SSL)[^\s]+)", raw)
-
-    if m:
-        result["tls_version"] = normalize_tls(m.group(1))
-
-    if result["tls_version"] is None:
-
-        m = re.search(r"New,\s*((?:TLS|SSL)[^\s,]+)", raw)
-
-        if m:
-            result["tls_version"] = normalize_tls(m.group(1))
-
-
-    # =============================================================================
-    # Cipher
-    # =============================================================================
-
-    m = re.search(r"Cipher\s*:\s*(\S+)", raw)
-
-    if m:
-
-        cipher = m.group(1)
-
-        if cipher not in ["0000", "(NONE)", "0"]:
-            result["cipher"] = cipher
-
-    if result["cipher"] is None:
-
-        m = re.search(r"Cipher is\s+(\S+)", raw)
-
-        if m:
-            result["cipher"] = m.group(1)
-    
-
-    # =============================================================================
-    # Classical key exchange detection
-    # =============================================================================
-
-    m = re.search(r"Server Temp Key:\s*(.+)", raw)
-
-    if m:
-
-        key = m.group(1).upper()
-
-        if "X25519" in key and result["pqc_key_exchange"] is None:
-            result["key_exchange"] = "X25519"
-
-        elif "X448" in key and result["pqc_key_exchange"] is None:
-            result["key_exchange"] = "X448"
-
-        elif "ECDH" in key or "ECDHE" in key:
-            result["key_exchange"] = "ECDHE"
-
-        elif "X25519" in key:
-            result["key_exchange"] = "X25519"
-
-        elif "X448" in key:
-            result["key_exchange"] = "X448"
-
-        elif "DH" in key:
-            result["key_exchange"] = "DHE"
-
-        elif "DH" in key and result["pqc_key_exchange"] is None:
-            result["key_exchange"] = "DHE"
-
-    # =============================================================================
-    # Key size
-    # =============================================================================
-
-    m = re.search(r"Server public key is (\d+) bit", raw)
-
-    if m:
-        result["key_size"] = int(m.group(1))
-
-    if result["key_size"] is None:
-
-        m = re.search(r"Public-Key:\s*\((\d+) bit\)", raw)
-
-        if m:
-            result["key_size"] = int(m.group(1))
-
-
-    # =============================================================================
-    # Issuer
-    # =============================================================================
-
-    m = re.search(r"issuer\s*[=:]\s*(.+)", raw, re.I)
-
-    if m:
-
-        issuer_raw = m.group(1)
-
-        cn = re.search(r"CN\s*=\s*([^,/\n]+)", issuer_raw)
-
-        if cn:
-            result["issuer"] = cn.group(1).strip()
-
-        else:
-            result["issuer"] = issuer_raw.strip()[:100]
-
-
-    # =============================================================================
-    # Expiry
-    # =============================================================================
-
-    expires_match = re.search(r"NotAfter:\s*(.+?GMT)", raw)
-
-    if not expires_match:
-        expires_match = re.search(r"notAfter\s*=\s*(.+)", raw)
-
-    if not expires_match:
-        expires_match = re.search(r"Not\s+After\s*:\s*(.+)", raw)
-
-    if expires_match:
-        raw_date = expires_match.group(1).strip()
-        result["expires"] = parse_date(raw_date)
-
-
-    # =============================================================================
-    # Signature
-    # =============================================================================
-
-    m = re.search(r"Signature Algorithm:\s*(\S+)", raw)
-
-    if m:
-        result["signature_algorithm"] = normalize_sig(m.group(1))
-
-    if result["signature_algorithm"] is None:
-
-        m = re.search(r"Peer signature type:\s*(\S+)", raw)
-
-        if m:
-            result["signature_algorithm"] = normalize_sig(m.group(1))
-
-
-    # =============================================================================
-    # Self signed
-    # =============================================================================
-
+            result["certificate"]["signature_algorithm"] = cert_info["signature_algorithm"]
+        if cert_info.get("raw_signature_algorithm"):
+            result["certificate"]["raw_signature_algorithm"] = cert_info["raw_signature_algorithm"]
+        if cert_info.get("fingerprint_sha256"):
+            result["certificate"]["fingerprint_sha256"] = cert_info["fingerprint_sha256"]
+        if cert_info.get("public_key"):
+            result["certificate"]["public_key"] = cert_info["public_key"]
+        if "extensions" in cert_info:
+            result["certificate"]["extensions"] = cert_info["extensions"]
+
+        # Rest of them make up the certificate chain
+        if len(pems) > 1:
+            for pem in pems[1:]:
+                result["certificate"]["certificate_chain"].append(parse_certificate(pem))
+
+    # Self signed fallback
     if "self signed" in raw.lower():
-        result["self_signed"] = True
+        result["certificate"]["self_signed"] = True
 
-    
-    # =============================================================================
-    # Perfect Forward Secrecy detection
-    # =============================================================================
+    # TLS Version
+    m = re.search(r"Protocol\s*:\s*((?:TLS|SSL)[^\s]+)", raw)
+    if m:
+        result["negotiated"]["tls_version"] = normalize_tls(m.group(1))
+    if result["negotiated"]["tls_version"] is None:
+        m = re.search(r"New,\s*((?:TLS|SSL)[^\s,]+)", raw)
+        if m:
+            result["negotiated"]["tls_version"] = normalize_tls(m.group(1))
 
-    if result["tls_version"] == "TLSv1.3":
-        result["pfs_supported"] = True
+    # Cipher
+    m = re.search(r"Cipher\s*:\s*(\S+)", raw)
+    if m:
+        cipher = m.group(1)
+        if cipher not in ["0000", "(NONE)", "0"]:
+            result["negotiated"]["cipher"] = cipher
+    if result["negotiated"]["cipher"] is None:
+        m = re.search(r"Cipher is\s+(\S+)", raw)
+        if m:
+            result["negotiated"]["cipher"] = m.group(1)
 
-    elif result["key_exchange"] in ["ECDHE", "DHE", "X25519", "X448", "HYBRID_PQC"]:
-        result["pfs_supported"] = True
+    # Server Temp Key
+    m = re.search(r"Server Temp Key:\s*(.+)", raw)
+    if m:
+        temp_key_full = m.group(1).strip()
+        parts = temp_key_full.split(",")
+        result["negotiated"]["server_temp_key"] = parts[0].strip()
+        if len(parts) > 1:
+            size_match = re.search(r"(\d+)\s*bits?", parts[-1])
+            if size_match:
+                result["negotiated"]["server_temp_key_size"] = int(size_match.group(1))
+
+    # ALPN protocol (robust)
+    alpn = None
+
+    patterns = [
+        r"ALPN protocol:\s*([^\s\n]+)",
+        r"ALPN,\s*server accepted to use\s*([^\s\n]+)",
+        r"ALPN protocols advertised by server:\s*([^\n]+)"
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, raw)
+        if m:
+            val = m.group(1).strip()
+            if "," in val:
+                val = val.split(",")[0].strip()
+            alpn = val
+            break
+
+    if alpn:
+        result["negotiated"]["alpn"] = alpn
+
+    # OCSP Detect
+    raw_lower = raw.lower()
+
+    if "ocsp response" in raw_lower:
+        result["negotiated"]["ocsp"]["supported"] = True
+
+        if "no response sent" in raw_lower:
+            result["negotiated"]["ocsp"]["stapled"] = False
+        else:
+            result["negotiated"]["ocsp"]["stapled"] = True
+
+    # Session Reuse
+    if "Reused, " in raw or "Session-ID: " in raw:
+        # Check carefully for 0000 as session ID if not reused
+        if "Reused," in raw:
+            result["negotiated"]["session_reused"] = True
 
     return result
 
@@ -477,15 +360,10 @@ def parse_openssl_output(raw: str) -> Dict[str, Any]:
 # =============================================================================
 
 def parse_nmap_output(raw: str) -> Dict[str, Any]:
-
-    result = {
+    result: Dict[str, Any] = {
         "tls_versions": [],
-        "cipher_suites": [],
-        "weak_ciphers": [],
-        "key_exchange": None,
-        "pfs_supported": False
+        "cipher_suites": []
     }
-
     if not raw:
         return result
 
@@ -496,19 +374,15 @@ def parse_nmap_output(raw: str) -> Dict[str, Any]:
         if tls in raw_upper:
             result["tls_versions"].append(tls.replace("V", "v"))
 
-    # Extract cipher suites
+    # Extract cipher suites (Strict matching to avoid TLS_AKE_WITH_AES_... malformed)
+    # Valid ciphers typically match TLS_... but Nmap strictly prefixes with TLS_
+    # Let's filter out anything that doesn't follow strict patterns
     cipher_matches = re.findall(r"TLS_[A-Z0-9_]+", raw_upper)
-
     for cipher in cipher_matches:
-
+        if "AKE_WITH_" in cipher or cipher.endswith("_"):
+            continue # Malformed
         if cipher not in result["cipher_suites"]:
             result["cipher_suites"].append(cipher)
-
-        if is_weak_cipher(cipher):
-            result["weak_ciphers"].append(cipher)
-
-        if has_pfs(cipher):
-            result["pfs_supported"] = True
 
     return result
 
@@ -518,51 +392,43 @@ def parse_nmap_output(raw: str) -> Dict[str, Any]:
 # =============================================================================
 
 def parse_testssl_json(data: Dict[str, Any]) -> Dict[str, Any]:
-
-    result = {
+    result: Dict[str, Any] = {
         "tls_versions": [],
         "cipher_suites": [],
-        "weak_ciphers": [],
-        "key_exchange": None,
-        "pfs_supported": False,
         "vulnerabilities": [],
         "issuer": None,
         "expires": None,
         "self_signed": False,
-        "key_size": None,
+        "public_key": None,
         "certificate_algorithm": None
     }
-
     if not data:
         return result
 
-    # TLS versions
     result["tls_versions"] = data.get("tls_versions", [])
 
-    # Cipher suites
-    result["cipher_suites"] = data.get("cipher_suites", [])
+    # Filter out malformed ciphers
+    raw_ciphers = data.get("cipher_suites", [])
+    valid_ciphers = []
+    for c in raw_ciphers:
+        if "AKE_WITH_" in c or c.endswith("_") or not c.upper().startswith("TLS_"):
+            continue
+        valid_ciphers.append(c)
+    result["cipher_suites"] = valid_ciphers
 
-    # Weak ciphers
-    for cipher in result["cipher_suites"]:
-        if is_weak_cipher(cipher):
-            result["weak_ciphers"].append(cipher)
-
-    # PFS detection
-    for cipher in result["cipher_suites"]:
-        if has_pfs(cipher):
-            result["pfs_supported"] = True
-            break
-
-    # Certificate information
+    result["vulnerabilities"] = data.get("vulnerabilities", [])
     result["issuer"] = data.get("issuer")
     result["expires"] = data.get("expires")
-    result["key_size"] = data.get("key_size")
+    
+    # Adapt legacy testssl key parsing
+    ks = data.get("key_size")
+    if ks:
+        result["public_key"] = {
+            "type": "Unknown",
+            "size": ks
+        }
+        
     result["certificate_algorithm"] = data.get("certificate_algorithm")
-
-    # Self-signed
     result["self_signed"] = data.get("self_signed", False)
-
-    # Vulnerabilities
-    result["vulnerabilities"] = data.get("vulnerabilities", [])
 
     return result

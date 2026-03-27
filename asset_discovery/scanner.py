@@ -31,7 +31,7 @@ CRYPTO_PORTS: Dict[int, str] = {
 }
 
 
-def scan_ports(ip: str, timeout: float = 1.0) -> List[Dict[str, object]]:
+def scan_ports(ip: str, timeout: float = 2.0) -> List[Dict[str, object]]:
     """
     Scan a target IP for open crypto-relevant ports using TCP connect scan.
 
@@ -50,12 +50,22 @@ def scan_ports(ip: str, timeout: float = 1.0) -> List[Dict[str, object]]:
 
     for port, protocol in CRYPTO_PORTS.items():
         try:
-            # Create a new TCP socket for each port
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # 🔥 Detect IP type (ADD THIS)
+            ip_type = "IPv6" if ":" in ip else "IPv4"
+            logger.debug("[Scanner] Scanning %s (%s)", ip, ip_type)
+
+            # 🔥 Create correct socket (REPLACE THIS PART)
+            if ":" in ip:
+                sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                address = (ip, port, 0, 0)  # IPv6 format
+            else:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                address = (ip, port)
+
             sock.settimeout(timeout)
 
-            # Attempt connection — returns 0 on success
-            result = sock.connect_ex((ip, port))
+            # 🔥 Use correct address
+            result = sock.connect_ex(address)
 
             if result == 0:
                 open_services.append({

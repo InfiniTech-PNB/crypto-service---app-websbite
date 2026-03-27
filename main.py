@@ -192,44 +192,19 @@ async def cbom(request: CBOMRequest):
     logger.info("Generating CBOM for %d assets", len(request.results))
 
     try:
+        results = [r.dict() for r in request.results]
 
-        combined_cbom = {
-            "assets": [],
-            "algorithms": [],
-            "keys": [],
-            "protocols": [],
-            "certificates": []
+        mode = request.mode if hasattr(request, "mode") else "aggregate"
+
+        cbom_result = generate_cbom(
+            {"results": results},
+            mode=mode
+        )
+
+        return {
+            "mode": mode,
+            "cbom": cbom_result
         }
-
-        seen_algorithms = set()
-        seen_keys = set()
-        seen_protocols = set()
-
-        for result in request.results:
-
-            cbom = generate_cbom(result.dict())
-
-            combined_cbom["assets"].append(result.host)
-
-            for algo in cbom["algorithms"]:
-                if algo["name"] not in seen_algorithms:
-                    combined_cbom["algorithms"].append(algo)
-                    seen_algorithms.add(algo["name"])
-
-            for key in cbom["keys"]:
-                if key["name"] not in seen_keys:
-                    combined_cbom["keys"].append(key)
-                    seen_keys.add(key["name"])
-
-            for proto in cbom["protocols"]:
-                if proto["name"] not in seen_protocols:
-                    combined_cbom["protocols"].append(proto)
-                    seen_protocols.add(proto["name"])
-
-            combined_cbom["certificates"].extend(cbom["certificates"])
-
-
-        return {"cbom": combined_cbom}
 
     except Exception as e:
         logger.error("CBOM generation failed: %s", e, exc_info=True)
@@ -237,8 +212,7 @@ async def cbom(request: CBOMRequest):
         raise HTTPException(
             status_code=500,
             detail=f"CBOM generation failed: {str(e)}",
-        )
-    
+        )    
 # ---------------------------------------------------------------------------
 # CLI runner — `python main.py` starts the server
 # ---------------------------------------------------------------------------

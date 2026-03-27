@@ -3,7 +3,7 @@
 # =============================================================================
 
 from pydantic import BaseModel, Field, IPvAnyAddress
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict, Any
 
 
 # -----------------------------------------------------------------------------
@@ -69,116 +69,93 @@ class ScanRequest(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Result Sub-Models
+# -----------------------------------------------------------------------------
+
+class OCSPState(BaseModel):
+    supported: bool = Field(False, description="Whether OCSP response is supported/present")
+    stapled: bool = Field(False, description="Whether OCSP response is stapled")
+
+
+class NegotiatedTLS(BaseModel):
+    tls_version: Optional[str] = Field(None, description="Negotiated TLS/SSL version")
+    cipher: Optional[str] = Field(None, description="Negotiated cipher suite")
+    server_temp_key: Optional[str] = Field(None, description="Raw Server Temp Key negotiated")
+    server_temp_key_size: Optional[int] = Field(None, description="Server Temp Key bits")
+    key_exchange: Optional[str] = Field(None, description="Classical Key exchange algorithm")
+    alpn: Optional[str] = Field(None, description="ALPN protocol negotiated")
+    session_reused: bool = Field(False, description="Whether session reuse is supported")
+    ocsp: OCSPState = Field(default_factory=OCSPState)
+
+
+class SupportedTLS(BaseModel):
+    tls_versions: List[str] = Field(default_factory=list, description="All supported TLS/SSL protocol versions")
+    cipher_suites: List[str] = Field(default_factory=list, description="All supported cipher suites")
+
+
+class PQCSecurity(BaseModel):
+    negotiated: List[str] = Field(default_factory=list, description="PQC algorithms negotiated")
+    supported: List[str] = Field(default_factory=list, description="PQC algorithms supported via OQS")
+    classification: Dict[str, str] = Field(default_factory=dict, description="Mappings to pure or hybrid")
+    confidence: str = Field("high", description="Confidence level of detection (low, medium, high)")
+
+
+class CertHistoryEntry(BaseModel):
+    issuer: str
+    not_before: str
+    not_after: str
+
+
+class CertExtensions(BaseModel):
+    key_usage: List[str] = Field(default_factory=list)
+    extended_key_usage: List[str] = Field(default_factory=list)
+    basic_constraints: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PublicKey(BaseModel):
+    type: str = Field(..., description="Key type (RSA, EC, etc.)")
+    size: Optional[int] = Field(None, description="Key size in bits")
+
+
+class CertificateInfo(BaseModel):
+    subject: Optional[str] = None
+    san: List[str] = Field(default_factory=list)
+    san_count: int = 0
+    issuer: Optional[str] = None
+    expires: Optional[str] = None
+    not_before: Optional[str] = None
+    signature_algorithm: Optional[str] = None
+    raw_signature_algorithm: Optional[str] = None
+    fingerprint_sha256: Optional[str] = None
+    public_key: Optional[PublicKey] = None
+    self_signed: bool = False
+    extensions: CertExtensions = Field(default_factory=CertExtensions)
+    certificate_history: List[CertHistoryEntry] = Field(default_factory=list)
+    certificate_chain: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+# -----------------------------------------------------------------------------
 # Scan result
 # -----------------------------------------------------------------------------
 
 class ScanResult(BaseModel):
-
     host: str = Field(..., description="Hostname")
     ip: str = Field(..., description="IP address")
     port: int = Field(..., description="TCP port")
     protocol: str = Field(..., description="Protocol name")
 
-    # ------------------------------------------------------------------
-    # Negotiated TLS values
-    # ------------------------------------------------------------------
+    status: Literal["success", "failed", "blocked"] = Field("success", description="Scan status")
+    failure_reason: Optional[str] = Field(None, description="Reason for failure if status is not success")
 
-    tls_version: Optional[str] = Field(
-        None,
-        description="Negotiated TLS/SSL version (TLSv1.2, TLSv1.3, SSLv3)",
-    )
+    negotiated: Optional[NegotiatedTLS] = Field(None, description="Negotiated TLS details")
+    supported: Optional[SupportedTLS] = Field(None, description="Supported TLS versions and ciphers")
+    pqc: Optional[PQCSecurity] = Field(None, description="Post-Quantum Cryptography details")
+    certificate: Optional[CertificateInfo] = Field(None, description="Certificate details")
 
-    cipher: Optional[str] = Field(
-        None,
-        description="Negotiated cipher suite",
-    )
+    weak_ciphers: List[str] = Field(default_factory=list)
+    pfs_supported: bool = False
+    vulnerabilities: List[str] = Field(default_factory=list)
 
-    key_exchange: Optional[str] = Field(
-        None,
-        description="Key exchange algorithm (ECDHE, RSA, X25519, MLKEM, etc)",
-    )
-
-    signature_algorithm: Optional[str] = Field(
-        None,
-        description="Certificate signature algorithm",
-    )
-
-    # ------------------------------------------------------------------
-    # PQC detection
-    # ------------------------------------------------------------------
-
-    pqc_key_exchange: Optional[str] = Field(
-        None,
-        description="Detected PQC key exchange algorithm (MLKEM/Kyber)",
-    )
-
-    pqc_signature: Optional[str] = Field(
-        None,
-        description="Detected PQC signature algorithm (Dilithium, Falcon, SPHINCS)",
-    )
-
-    hybrid_pqc: bool = Field(
-        False,
-        description="Whether hybrid PQC TLS (classical + PQC) is used",
-    )
-
-    # ------------------------------------------------------------------
-    # Enumerated TLS configuration
-    # ------------------------------------------------------------------
-
-    supported_tls_versions: List[str] = Field(
-        default_factory=list,
-        description="All supported TLS/SSL protocol versions",
-    )
-
-    cipher_suites: List[str] = Field(
-        default_factory=list,
-        description="All supported cipher suites",
-    )
-
-    weak_ciphers: List[str] = Field(
-        default_factory=list,
-        description="Weak or insecure ciphers detected",
-    )
-
-    # ------------------------------------------------------------------
-    # Certificate information
-    # ------------------------------------------------------------------
-
-    key_size: Optional[int] = Field(
-        None,
-        description="Certificate public key size in bits",
-        example=2048,
-    )
-
-    issuer: Optional[str] = Field(
-        None,
-        description="Certificate issuer",
-    )
-
-    expires: Optional[str] = Field(
-        None,
-        description="Certificate expiration date (YYYY-MM-DD)",
-    )
-
-    # ------------------------------------------------------------------
-    # Security posture
-    # ------------------------------------------------------------------
-
-    pfs_supported: bool = Field(
-        False,
-        description="Perfect Forward Secrecy supported",
-    )
-
-    vulnerabilities: List[str] = Field(
-        default_factory=list,
-        description="Detected TLS vulnerabilities",
-    )
-
-    self_signed: bool = Field(
-        False,
-        description="Whether certificate is self-signed",
-    )
 
 # -----------------------------------------------------------------------------
 # API response
@@ -190,9 +167,14 @@ class ScanResponse(BaseModel):
         default_factory=list,
         description="Cryptographic scan results",
     )
+
+
 # -----------------------------------------------------------------------------
 # CBOM models
 # -----------------------------------------------------------------------------
-
 class CBOMRequest(BaseModel):
+    mode: Optional[str] = Field(
+        default="aggregate",
+        description="CBOM generation mode: 'aggregate' or 'per_asset'"
+    )
     results: List[ScanResult]
