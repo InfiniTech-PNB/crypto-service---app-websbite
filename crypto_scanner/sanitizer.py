@@ -8,7 +8,7 @@
 import re
 import logging
 from typing import Optional
-
+import ipaddress
 logger = logging.getLogger("scanner")
 
 # ---------------------------------------------------------------------------
@@ -27,23 +27,7 @@ _IPV4_RE = re.compile(
 # Characters that could enable shell injection
 _DANGEROUS_CHARS = re.compile(r"[;&|`$(){}!<>\"\'\\\n\r\t]")
 
-
 def validate_host(host: str) -> Optional[str]:
-    """
-    Validate and sanitize a hostname or IPv4 address.
-
-    Validation steps:
-        1. Reject empty or whitespace-only strings
-        2. Strip whitespace and lowercase
-        3. Reject strings with shell-injection characters
-        4. Validate as either a valid hostname or IPv4 address
-
-    Args:
-        host: Raw hostname or IP string from user input.
-
-    Returns:
-        Normalized hostname string if valid, None if invalid.
-    """
     if not host or not isinstance(host, str):
         logger.warning("[Sanitizer] Rejected empty or non-string host")
         return None
@@ -61,22 +45,20 @@ def validate_host(host: str) -> Optional[str]:
         )
         return None
 
+    # ✅ NEW: Validate IP (IPv4 + IPv6)
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+
     # Validate as hostname
     if _HOSTNAME_RE.match(host):
         return host
 
-    # Validate as IPv4
-    ipv4_match = _IPV4_RE.match(host)
-    if ipv4_match:
-        # Verify each octet is 0-255
-        octets = [int(g) for g in ipv4_match.groups()]
-        if all(0 <= o <= 255 for o in octets):
-            return host
-
     logger.warning("[Sanitizer] Rejected invalid host format: %s", host)
     return None
-
-
+    
 def validate_port(port: int) -> bool:
     """
     Validate a port number.

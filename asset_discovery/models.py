@@ -47,7 +47,7 @@ class AssetInfo(BaseModel):
         services: List of open services detected on this host.
     """
     host: str = Field(..., description="Fully qualified hostname")
-    ip: str = Field(..., description="Resolved IPv4 address")
+    ip: str = Field(..., description="Resolved IP address (IPv4 or IPv6)")
     asset_type: str = Field(..., description="Asset classification (API, VPN, WEB, etc.)")
     services: List[ServiceInfo] = Field(
         default_factory=list,

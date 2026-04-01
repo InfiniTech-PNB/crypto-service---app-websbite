@@ -42,6 +42,14 @@ logger = logging.getLogger("discovery")
 # Maximum concurrent threads for resolution and scanning
 MAX_WORKERS = 20
 
+def classify_ip_type(ip: str) -> str:
+    if ":" not in ip:
+        return "IPv4"
+
+    if ip.lower().startswith("64:ff9b:"):
+        return "NAT64"
+
+    return "IPv6"
 
 def discover_assets(domain: str) -> Dict[str, Any]:
     """
@@ -164,7 +172,7 @@ def discover_assets(domain: str) -> Dict[str, Any]:
     logger.info("[Discovery] Stage 4: Resolving hostnames to IPs")
 
     # host → ip mapping (only valid, globally-routable IPs)
-    resolved: Dict[str, str] = {}
+    resolved: Dict[str, List[str]] = {}
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_host = {
@@ -203,9 +211,10 @@ def discover_assets(domain: str) -> Dict[str, Any]:
             host_to_ips.setdefault(host, []).append(ip)
 
     # -------------------------------------------------------------------------
-    # Step 2: Limit IPs per host
+    # Step 2: Limit IPs per host (IPv4 + IPv6 aware)
     # -------------------------------------------------------------------------
-    filtered_ips = set()
+    filtered_ips = []
+    seen_ips = set()
 
     for host, ips in host_to_ips.items():
         # Remove duplicates while preserving order
@@ -216,9 +225,23 @@ def discover_assets(domain: str) -> Dict[str, Any]:
                 seen.add(ip)
                 unique_host_ips.append(ip)
 
-        # Limit number of IPs per host
-        limited_ips = unique_host_ips[:MAX_IPS_PER_HOST]
-        filtered_ips.update(limited_ips)
+        # Split IPv4 and IPv6
+        ipv4s = [ip for ip in unique_host_ips if ":" not in ip]
+        ipv6s = [ip for ip in unique_host_ips if ":" in ip]
+
+        limited_ips = []
+
+        if ipv4s:
+            limited_ips.append(ipv4s[0])
+
+        if ipv6s:
+            limited_ips.append(ipv6s[0])
+
+        # Add to final list (deduplicated)
+        for ip in limited_ips:
+            if ip not in seen_ips:
+                seen_ips.add(ip)
+                filtered_ips.append(ip)
 
     # -------------------------------------------------------------------------
     # Step 3: Prepare for scanning
@@ -270,10 +293,11 @@ def discover_assets(domain: str) -> Dict[str, Any]:
                 continue
 
             asset_type = classify_asset(host, services)
-
+            ip_type = classify_ip_type(ip)
             assets.append({
                 "host": host,
                 "ip": ip,
+                "ip_type": ip_type,
                 "asset_type": asset_type,
                 "services": [
                     {"port": svc["port"], "protocol_name": svc["protocol_name"]}

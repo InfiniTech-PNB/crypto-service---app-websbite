@@ -19,9 +19,14 @@ def resolve_ip(host: str) -> List[str]:
         # Get IPv4
         _, _, ipv4_list = socket.gethostbyname_ex(host)
 
-        # Get IPv6 (via getaddrinfo)
+        # Get IPv6 (only)
         addr_info = socket.getaddrinfo(host, None)
-        ipv6_list = [info[4][0] for info in addr_info]
+        ipv6_list = []
+
+        for info in addr_info:
+            ip = info[4][0]
+            if ":" in ip:  # only IPv6
+                ipv6_list.append(ip)
 
         all_ips = ipv4_list + ipv6_list
 
