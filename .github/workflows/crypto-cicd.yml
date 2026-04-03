@@ -41,6 +41,8 @@ jobs:
     runs-on: self-hosted  # This targets your EC2 runner
 
     steps:
+    - name: Stop service for clean deployment
+      run: pm2 stop crypto-api || true
     - uses: actions/checkout@v4
 
     - name: Setup Virtual Environment & Tools
