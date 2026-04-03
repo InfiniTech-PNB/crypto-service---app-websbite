@@ -42,7 +42,7 @@ jobs:
 
     steps:
     - name: Stop service for clean deployment
-      run: pm2 stop crypto-api || true
+      run: sudo pm2 stop crypto-api || true
     - uses: actions/checkout@v4
 
     - name: Setup Virtual Environment & Tools
