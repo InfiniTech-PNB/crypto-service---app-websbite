@@ -53,9 +53,9 @@ jobs:
         ./venv/bin/pip install -r requirements.txt
         
         # 3. Clone external tools ONLY if they don't exist (prevents errors on re-deploy)
-        [ -d "liboqs" ] || git clone https://github.com/open-quantum-safe/liboqs.git
-        [ -d "oqs-provider" ] || git clone https://github.com/open-quantum-safe/oqs-provider.git
-        [ -d "testssl.sh" ] || git clone https://github.com/drwetter/testssl.sh.git
+        [ -d "liboqs" ] || git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
+        [ -d "oqs-provider" ] || git clone --depth 1 https://github.com/open-quantum-safe/oqs-provider.git
+        [ -d "testssl.sh" ] || git clone --depth 1 https://github.com/drwetter/testssl.sh.git
 
     - name: Restart Service with PM2
       run: |
