@@ -43,7 +43,12 @@ jobs:
     steps:
     - name: Stop service for clean deployment
       run: sudo pm2 stop crypto-api || true
-    - uses: actions/checkout@v4
+    - name: Force Cleanup with Sudo
+      run: sudo rm -rf /home/ubuntu/crypto-runner/_work/crypto-service/crypto-service/*
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        clean: false
 
     - name: Setup Virtual Environment & Tools
       run: |
