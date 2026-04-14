@@ -63,16 +63,21 @@ async def send_log(job_id: str, message: str):
 # ---------------------------------------------------------------------------
 @app.websocket("/ws/logs")
 async def logs_ws(ws: WebSocket, jobId: str):
+    logger.info("WebSocket connected for job: %s", jobId)
     await ws.accept()
+    logger.info("WebSocket accepted for job: %s", jobId)
 
     # replay old logs
     for log in log_buffer.get(jobId, []):
         await ws.send_text(log)
+    logger.info("WebSocket replayed logs for job: %s", jobId)
 
     connections[jobId] = ws
+    logger.info("WebSocket stored for job: %s", jobId)
 
     try:
         while True:
+            logger.info("WebSocket waiting for message for job: %s", jobId)
             await ws.receive_text()  # keep connection alive
     except:
         connections.pop(jobId, None)
