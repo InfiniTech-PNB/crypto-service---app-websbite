@@ -22,6 +22,11 @@ class DiscoveryRequest(BaseModel):
         examples=["github.com", "example.com"],
     )
 
+    jobId: str = Field(
+        ...,
+        description="Unique job identifier for tracking logs and results",
+        examples=["abc123-uuid"],
+    )
 
 class ServiceInfo(BaseModel):
     """

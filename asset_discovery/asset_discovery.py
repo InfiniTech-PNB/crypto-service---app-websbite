@@ -51,7 +51,7 @@ def classify_ip_type(ip: str) -> str:
 
     return "IPv6"
 
-def discover_assets(domain: str) -> Dict[str, Any]:
+def discover_assets(domain: str, log_func=None) -> Dict[str, Any]:
     """
     Execute the full asset discovery pipeline for a given root domain.
 
@@ -76,16 +76,21 @@ def discover_assets(domain: str) -> Dict[str, Any]:
             "assets": [...]
         }
     """
+    def log(message: str):
+        logger.info(message)
+        if log_func:
+            log_func(message)
+
     domain = domain.lower().strip().strip(".")
 
-    logger.info("=" * 70)
-    logger.info("[Discovery] Starting asset discovery for: %s", domain)
-    logger.info("=" * 70)
+    log("=" * 70)
+    log(f"[Discovery] Starting asset discovery for: {domain}")
+    log("=" * 70)
     
     # -------------------------------------------------------------------------
     # Stage 1: Passive + Fast Discovery
     # -------------------------------------------------------------------------
-    logger.info("[Discovery] Stage 1: Passive (fast sources)")
+    log(f"[Discovery] Stage 1: Passive (fast sources): {domain}")
 
     ct_hosts: set = set()
     bufferover_hosts: set = set()
@@ -113,7 +118,7 @@ def discover_assets(domain: str) -> Dict[str, Any]:
     # -------------------------------------------------------------------------
     # Stage 2: Active DNS Brute Force
     # -------------------------------------------------------------------------
-    logger.info("[Discovery] Stage 2: DNS brute force")
+    log(f"[Discovery] Stage 2: DNS brute force: {domain}")
     dns_hosts = discover_from_dns(domain, max_workers=MAX_WORKERS)
 
     # -------------------------------------------------------------------------
@@ -128,7 +133,7 @@ def discover_assets(domain: str) -> Dict[str, Any]:
     # Remove wildcards
     all_hosts = {h for h in all_hosts if not h.startswith("*")}
 
-    logger.info("[Discovery] Hosts after fast stage: %d", len(all_hosts))
+    log(f"[Discovery] Hosts after fast stage: {len(all_hosts)}")
 
     # -------------------------------------------------------------------------
     # Stage 4: Conditional Enrichment (ONLY IF NEEDED)
@@ -136,7 +141,7 @@ def discover_assets(domain: str) -> Dict[str, Any]:
     THRESHOLD = 50  # you can tune this
 
     if len(all_hosts) < THRESHOLD:
-        logger.info("[Discovery] Low host count → running enrichment sources")
+        log(f"[Discovery] Low host count → running enrichment sources: {domain}")
 
         vt_hosts: set = set()
         otx_hosts: set = set()
@@ -164,12 +169,12 @@ def discover_assets(domain: str) -> Dict[str, Any]:
         all_hosts |= vt_hosts
         all_hosts |= otx_hosts
 
-    logger.info("[Discovery] Total unique hosts after enrichment: %d", len(all_hosts))
+    log(f"[Discovery] Total unique hosts after enrichment: {len(all_hosts)}")
 
     # -------------------------------------------------------------------------
     # Stage 4: DNS Resolution (concurrent)
     # -------------------------------------------------------------------------
-    logger.info("[Discovery] Stage 4: Resolving hostnames to IPs")
+    log(f"[Discovery] Stage 4: Resolving hostnames to IPs: {domain}")
 
     # host → ip mapping (only valid, globally-routable IPs)
     resolved: Dict[str, List[str]] = {}
@@ -188,16 +193,14 @@ def discover_assets(domain: str) -> Dict[str, Any]:
             except Exception as e:
                 logger.debug("[Discovery] Resolution error for %s: %s", host, e)
 
-    logger.info(
-        "[Discovery] Resolved %d / %d hosts successfully",
-        len(resolved),
-        len(all_hosts),
+    log(
+        f"[Discovery] Resolved {len(resolved)} / {len(all_hosts)} hosts successfully: {domain}"
     )
 
     # -------------------------------------------------------------------------
     # Stage 5: Port Scanning (optimized with CDN/IP limiting)
     # -------------------------------------------------------------------------
-    logger.info("[Discovery] Stage 5: Scanning ports")
+    log(f"[Discovery] Stage 5: Scanning ports: {domain}")
 
     MAX_IPS_PER_HOST = 2  # limit to avoid CDN explosion
 
@@ -248,13 +251,11 @@ def discover_assets(domain: str) -> Dict[str, Any]:
     # -------------------------------------------------------------------------
     unique_ips = list(filtered_ips)
 
-    logger.info(
-        "[Discovery] Reduced IPs from %d → %d after CDN filtering",
-        len(set(ip for ips in resolved.values() for ip in ips)),
-        len(unique_ips),
+    log(
+        f"[Discovery] Reduced IPs from {len(set(ip for ips in resolved.values() for ip in ips))} → {len(unique_ips)} after CDN filtering: {domain}"
     )
 
-    logger.info("[Discovery] Scanning %d unique IPs", len(unique_ips))
+    log(f"[Discovery] Scanning {len(unique_ips)} unique IPs: {domain}")
 
     # -------------------------------------------------------------------------
     # Step 4: Scan IPs
@@ -277,7 +278,7 @@ def discover_assets(domain: str) -> Dict[str, Any]:
     # -------------------------------------------------------------------------
     # Stage 6: Classification and Filtering
     # -------------------------------------------------------------------------
-    logger.info("[Discovery] Stage 6: Classifying assets and filtering")
+    log(f"[Discovery] Stage 6: Classifying assets and filtering: {domain}")
 
     assets: List[Dict[str, Any]] = []
 
@@ -316,12 +317,10 @@ def discover_assets(domain: str) -> Dict[str, Any]:
         "assets": assets,
     }
 
-    logger.info("=" * 70)
-    logger.info(
-        "[Discovery] Complete: %d assets found for %s",
-        len(assets),
-        domain,
+    log("=" * 70)
+    log(
+        f"[Discovery] Complete: {len(assets)} assets found for {domain}"
     )
-    logger.info("=" * 70)
+    log("=" * 70)
 
     return result
