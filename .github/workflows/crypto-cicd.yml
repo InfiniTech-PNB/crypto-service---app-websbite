@@ -1,0 +1,68 @@
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Crypto Service CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  # --- STAGE 1: TEST ---
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12"
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+  # --- STAGE 2: DEPLOY ---
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+
+    steps:
+    - name: Stop service for clean deployment
+      run: sudo pm2 stop crypto-api || true
+    - name: Force Cleanup with Sudo
+      run: sudo rm -rf /home/ubuntu/crypto-runner/_work/crypto-service/crypto-service/*
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        clean: false
+
+    - name: Setup Virtual Environment & Tools
+      run: |
+        # 1. Create venv if it doesn't exist
+        python3 -m venv venv
+        
+        # 2. Install Python deps
+        ./venv/bin/pip install --upgrade pip
+        ./venv/bin/pip install -r requirements.txt
+        
+        # 3. Clone external tools ONLY if they don't exist (prevents errors on re-deploy)
+        [ -d "liboqs" ] || git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
+        [ -d "oqs-provider" ] || git clone --depth 1 https://github.com/open-quantum-safe/oqs-provider.git
+        [ -d "testssl.sh" ] || git clone --depth 1 https://github.com/drwetter/testssl.sh.git
+
+    - name: Restart Service with PM2
+      run: |
+        # Restart the api if it exists, otherwise start it
+        sudo pm2 restart crypto-api || sudo pm2 start "./venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000" --name "crypto-api"
+        sudo pm2 save
