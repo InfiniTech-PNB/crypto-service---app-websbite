@@ -1,21 +1,39 @@
 # KavachAI Crypto Service
 
-Post-Quantum Cryptography (PQC) Readiness Scanner for discovering domain assets and analyzing TLS configurations for quantum-vulnerable cryptography.
+> **Post-Quantum Cryptography (PQC) Readiness Scanner**
+> Built for PNB Hackathon 2026 by **InfiniTech**
+
+This microservice handles the heavy lifting of discovering domain assets and analyzing their TLS configurations for quantum-vulnerable cryptography using tools like Nmap, OpenSSL, and testssl.sh.
+
+---
+
+## 📌 Table of Contents
+
+- [Features](#-features)
+- [Architecture & Flow](#-architecture--flow)
+- [Tech Stack](#️-tech-stack)
+- [Project Structure](#-project-structure)
+- [Local Setup (First Time)](#-local-setup-first-time)
+- [Running the Server](#-running-the-server)
+- [API Endpoints](#-api-endpoints)
+- [Team](#-team)
 
 ---
 
 ## 🚀 Features
 
-- **Asset Discovery**: Discovers subdomains and associated infrastructure.
-- **Service Detection**: Identifies services running on discovered assets.
-- **TLS Cryptographic Analysis**: Analyzes TLS configurations, including versions, cipher suites, key exchanges, and signature algorithms.
-- **PQC Readiness Evaluation**: Checks for classical algorithms vulnerable to quantum attacks and identifies PQC hybrid support.
-- **CBOM Generation**: Generates Cryptographic Bill of Materials.
-- **PQC Migration Recommendations**: Suggests recommended PQC algorithms like ML-KEM-768 (Kyber) and CRYSTALS-Dilithium.
+| Feature | Description |
+|---|---|
+| **Asset Discovery** | Discovers subdomains and associated infrastructure |
+| **Service Detection** | Identifies services running on discovered assets |
+| **TLS Cryptographic Analysis** | Analyzes TLS configurations, including versions, cipher suites, key exchanges, and signature algorithms |
+| **PQC Readiness Evaluation** | Checks for classical algorithms vulnerable to quantum attacks and identifies PQC hybrid support |
+| **CBOM Generation** | Generates Cryptographic Bill of Materials |
+| **PQC Migration Recommendations** | Suggests recommended PQC algorithms like ML-KEM-768 (Kyber) and CRYSTALS-Dilithium |
 
 ---
 
-## 🔄 Architecture / Execution Flow
+## 🔄 Architecture & Flow
 
 1. **Asset Discovery**: Discovers domain subdomains and their associated IP addresses.
 2. **Crypto Scanner**: Receives discovered assets and queries their services.
@@ -26,14 +44,22 @@ Post-Quantum Cryptography (PQC) Readiness Scanner for discovering domain assets 
 
 ---
 
-## 🛠️ Technology Stack
+## 🛠️ Tech Stack
 
-### Backend
-- **Language**: Python 3.12.8
-- **Framework**: FastAPI
-- **System Tools**: Nmap, OpenSSL, git, curl
-- **Security Tools**: testssl.sh
-- **Quantum-Safe Cryptography**: liboqs, oqs-provider
+### Backend & Framework
+| Technology | Version | Purpose |
+|---|---|---|
+| **Python** | 3.12.8 | Primary language |
+| **FastAPI** | — | Web framework for the API |
+
+### System & Security Tools
+| Technology | Purpose |
+|---|---|
+| **Nmap** | Port scanning and service detection |
+| **OpenSSL** | TLS handshakes and certificate extraction |
+| **testssl.sh** | Deep TLS security analysis script |
+| **liboqs** | Open Quantum Safe cryptographic algorithms |
+| **oqs-provider**| OpenSSL PQC Provider |
 
 ---
 
@@ -41,6 +67,7 @@ Post-Quantum Cryptography (PQC) Readiness Scanner for discovering domain assets 
 
 ```text
 crypto-service/
+│
 ├── asset_discovery/        # Discovery modules and resolver
 ├── crypto_scanner/         # Cryptographic scanners (OpenSSL, Nmap, testssl)
 ├── liboqs/                 # Open Quantum Safe cryptographic algorithms
@@ -52,55 +79,69 @@ crypto-service/
 
 ---
 
-## ⚙️ Setup & Installation
+## ⚙️ Local Setup (First Time)
 
-### Prerequisites
+### OS Requirements & Windows Support
+
+> ⚠️ **Important for Windows Users**: Because this service heavily relies on `testssl.sh` (a bash script) and requires compiling C libraries (`liboqs` and `oqs-provider`), **native Windows execution is not recommended**. 
+> 
+> **How to run on Windows:**
+> Use **WSL (Windows Subsystem for Linux)**. We highly recommend installing **Ubuntu on WSL2** and running all commands below inside the WSL Ubuntu terminal. Docker is also a great alternative.
+
+### Prerequisites (Linux / WSL / macOS)
 - Python >= 3.12.8
 - System Tools: `nmap`, `openssl`, `git`, `curl`
-  - Ubuntu / Debian: `sudo apt install nmap openssl git curl`
-  - MacOS: `brew install nmap openssl`
+  - Ubuntu / Debian (or WSL): `sudo apt update && sudo apt install nmap openssl git curl build-essential cmake`
+  - macOS: `brew install nmap openssl cmake`
 
 ### Setup
-1. Navigate to the crypto service folder:
+
+1. **Clone & Navigate**
    ```bash
+   git clone <repository-url>
    cd crypto-service
    ```
-2. Create and activate a Python Virtual Environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-3. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Clone required external tools in the project root:
+
+2. **Clone Required External Tools**
+   These tools must be cloned into the project root:
    ```bash
    git clone https://github.com/open-quantum-safe/liboqs.git
    git clone https://github.com/open-quantum-safe/oqs-provider.git
    git clone https://github.com/drwetter/testssl.sh.git
    ```
 
-*(Note: There are no `.env` files required for this service configuration. Any system execution relies on paths set or tool binaries present.)*
+3. **Create and activate a Python Virtual Environment**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+4. **Install Python dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+*(Note: There are no `.env` files required for this service. The system relies on standard tool binaries being available in your PATH.)*
 
 ---
 
-## 🏃 Running the Application
+## 🏃 Running the Server
 
-### Start the Crypto Service
+### Start the FastAPI Service
 ```bash
 cd crypto-service
 uvicorn main:app --reload --port 8000
 ```
-The server will start at `http://localhost:8000`
-Swagger API docs will be available at `http://localhost:8000/docs`
+
+- The server runs at `http://localhost:8000`
+- Interactive Swagger API docs are available at `http://localhost:8000/docs`
 
 ---
 
 ## 📊 API Endpoints
 
 ### Health Check
-- `GET /health`: Returns the service status.
+- `GET /health`: Returns the service status to verify the API is running.
 
 ### Asset Discovery
 - `POST /discover`: Discovers all public-facing assets for the given domain. This runs a full pipeline including passive subdomain discovery, active DNS brute force, DNS resolution, port scanning, and asset classification.
@@ -113,7 +154,7 @@ Swagger API docs will be available at `http://localhost:8000/docs`
 
 ---
 
-## 👤 Team Information
-Team: InfiniTech
+## 👤 Team
 
----
+- **Author:** InfiniTech
+- **Event:** PNB Hackathon 2026
