@@ -66,7 +66,7 @@ This microservice handles the heavy lifting of discovering domain assets and ana
 ## 📂 Project Structure
 
 ```text
-crypto-service/
+crypto-service---app-websbite/
 │
 ├── asset_discovery/        # Discovery modules and resolver
 ├── crypto_scanner/         # Cryptographic scanners (OpenSSL, Nmap, testssl)
@@ -99,7 +99,7 @@ crypto-service/
 1. **Clone & Navigate**
    ```bash
    git clone <repository-url>
-   cd crypto-service
+   cd crypto-service---app-websbite
    ```
 
 2. **Clone Required External Tools**
@@ -129,7 +129,7 @@ crypto-service/
 
 ### Start the FastAPI Service
 ```bash
-cd crypto-service
+cd crypto-service---app-websbite
 uvicorn main:app --reload --port 8000
 ```
 
