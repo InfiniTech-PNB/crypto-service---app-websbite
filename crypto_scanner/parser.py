@@ -391,7 +391,7 @@ def parse_nmap_output(raw: str) -> Dict[str, Any]:
 # testssl.sh parser
 # =============================================================================
 
-def parse_testssl_json(data: Dict[str, Any]) -> Dict[str, Any]:
+def parse_testssl_json(data: Any) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "tls_versions": [],
         "cipher_suites": [],
@@ -405,30 +405,99 @@ def parse_testssl_json(data: Dict[str, Any]) -> Dict[str, Any]:
     if not data:
         return result
 
-    result["tls_versions"] = data.get("tls_versions", [])
+    # testssl.sh JSON output format can be a list of dictionaries (findings)
+    if isinstance(data, list):
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = entry.get("id")
+            finding = entry.get("finding", "")
+            severity = entry.get("severity", "")
+            result_val = entry.get("result", "")
 
-    # Filter out malformed ciphers
-    raw_ciphers = data.get("cipher_suites", [])
-    valid_ciphers = []
-    for c in raw_ciphers:
-        if "AKE_WITH_" in c or c.endswith("_") or not c.upper().startswith("TLS_"):
-            continue
-        valid_ciphers.append(c)
-    result["cipher_suites"] = valid_ciphers
+            # Protocols
+            if entry_id in ["SSLv2", "SSLv3", "TLS1", "TLS1_1", "TLS1_2", "TLS1_3"]:
+                if "offered" in finding.lower() or "offered" in result_val.lower():
+                    mapped = {
+                        "SSLv2": "SSLv2",
+                        "SSLv3": "SSLv3",
+                        "TLS1": "TLSv1.0",
+                        "TLS1_1": "TLSv1.1",
+                        "TLS1_2": "TLSv1.2",
+                        "TLS1_3": "TLSv1.3"
+                    }.get(entry_id)
+                    if mapped and mapped not in result["tls_versions"]:
+                        result["tls_versions"].append(mapped)
 
-    result["vulnerabilities"] = data.get("vulnerabilities", [])
-    result["issuer"] = data.get("issuer")
-    result["expires"] = data.get("expires")
-    
-    # Adapt legacy testssl key parsing
-    ks = data.get("key_size")
-    if ks:
-        result["public_key"] = {
-            "type": "Unknown",
-            "size": ks
-        }
-        
-    result["certificate_algorithm"] = data.get("certificate_algorithm")
-    result["self_signed"] = data.get("self_signed", False)
+            # Ciphers
+            # Findings can contain cipher suite names separated by spaces, commas, or newlines
+            for word in re.split(r"[\s,]+", finding):
+                word_clean = word.strip().upper()
+                if word_clean.startswith("TLS_") or "_WITH_" in word_clean:
+                    # Clean up things like (128 bits) or hex codes
+                    word_clean = re.sub(r"[^A-Z0-9_]", "", word_clean)
+                    if "AKE_WITH_" in word_clean or word_clean.endswith("_"):
+                        continue
+                    if word_clean not in result["cipher_suites"]:
+                        result["cipher_suites"].append(word_clean)
+
+            # Vulnerabilities
+            if severity in ["LOW", "MEDIUM", "HIGH", "CRITICAL"] and "not vulnerable" not in finding.lower() and "no vulnerability" not in finding.lower():
+                vuln_name = entry_id or finding
+                if vuln_name not in result["vulnerabilities"]:
+                    result["vulnerabilities"].append(vuln_name)
+
+            # Issuer
+            if entry_id == "cert_issuer":
+                result["issuer"] = finding
+
+            # Expiry
+            if entry_id in ["cert_expiration", "cert_notAfter"]:
+                result["expires"] = parse_date(finding)
+
+            # Key size / Key algorithm
+            if entry_id == "cert_keySize":
+                try:
+                    size_match = re.search(r"(\d+)", finding)
+                    if size_match:
+                        result["public_key"] = {
+                            "type": "Unknown",
+                            "size": int(size_match.group(1))
+                        }
+                except:
+                    pass
+
+            if entry_id == "cert_signatureAlgorithm":
+                result["certificate_algorithm"] = finding
+
+            if entry_id == "cert_trust" and "self signed" in finding.lower():
+                result["self_signed"] = True
+
+    elif isinstance(data, dict):
+        result["tls_versions"] = data.get("tls_versions", [])
+
+        # Filter out malformed ciphers
+        raw_ciphers = data.get("cipher_suites", [])
+        valid_ciphers = []
+        for c in raw_ciphers:
+            if "AKE_WITH_" in c or c.endswith("_") or not c.upper().startswith("TLS_"):
+                continue
+            valid_ciphers.append(c)
+        result["cipher_suites"] = valid_ciphers
+
+        result["vulnerabilities"] = data.get("vulnerabilities", [])
+        result["issuer"] = data.get("issuer")
+        result["expires"] = data.get("expires")
+
+        # Adapt legacy testssl key parsing
+        ks = data.get("key_size")
+        if ks:
+            result["public_key"] = {
+                "type": "Unknown",
+                "size": ks
+            }
+
+        result["certificate_algorithm"] = data.get("certificate_algorithm")
+        result["self_signed"] = data.get("self_signed", False)
 
     return result

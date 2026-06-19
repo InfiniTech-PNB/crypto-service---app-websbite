@@ -229,6 +229,31 @@ def has_pfs(value: str | None) -> bool:
 
 
 # =============================================================================
+# Weak Cipher Check
+# =============================================================================
+
+def is_weak_cipher(cipher: str | None) -> bool:
+    if not cipher:
+        return False
+    c = cipher.upper().replace("-", "_")
+    
+    # 1. Obvious weak/legacy symmetric algorithms, hashing, or key exchange
+    weak_keywords = ["RC4", "3DES", "DES", "MD5", "EXPORT", "NULL", "ANON", "ADH", "AECDH", "RC2", "IDEA", "SEED"]
+    if any(k in c for k in weak_keywords):
+        return True
+        
+    # 2. CBC mode with SHA1 in TLSv1.2 (SHA256/384/512 are SHA-2 and are acceptable, though CBC is legacy, CBC-SHA1 is weak)
+    # OpenSSL: ECDHE-RSA-AES128-SHA -> ECDHE_RSA_AES128_SHA
+    # IANA: TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA -> TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+    # If it ends with _SHA (and not _SHA256 or _SHA384 or _SHA512) and does not contain GCM/POLY1305/CCM
+    if "SHA" in c and not any(x in c for x in ["SHA256", "SHA384", "SHA512"]):
+        if not any(x in c for x in ["GCM", "POLY1305", "CCM"]):
+            return True
+            
+    return False
+
+
+# =============================================================================
 # MAIN ENRICH FUNCTION
 # =============================================================================
 
@@ -308,6 +333,9 @@ def enrich_scan(
 
     enriched["supported"]["cipher_suites"] = cipher_list
 
+    # ---------------- Weak ciphers ----------------
+    enriched["weak_ciphers"] = sorted([c for c in cipher_list if is_weak_cipher(c)])
+
     # ---------------- Key exchange ----------------
     temp_key = enriched["negotiated"].get("server_temp_key")
     kex = temp_key.split(",")[0].strip() if temp_key else None
@@ -323,17 +351,54 @@ def enrich_scan(
                 enriched["pfs_supported"] = True
                 break
 
-    # ---------------- Vulnerabilities ----------------
-    enriched["vulnerabilities"] = sorted(set(testssl_parsed.get("vulnerabilities", [])))
-
-    # ---------------- Certificate History ----------------
-    enriched["certificate"]["certificate_history"] = get_certificate_history(domain)
-
     # ---------------- Fallback from testssl ----------------
     if not enriched["certificate"].get("issuer"):
         enriched["certificate"]["issuer"] = testssl_parsed.get("issuer")
 
     if not enriched["certificate"].get("expires"):
         enriched["certificate"]["expires"] = testssl_parsed.get("expires")
+
+    if not enriched["certificate"].get("public_key") and testssl_parsed.get("public_key"):
+        enriched["certificate"]["public_key"] = testssl_parsed["public_key"]
+
+    if not enriched["certificate"].get("signature_algorithm") and testssl_parsed.get("certificate_algorithm"):
+        enriched["certificate"]["signature_algorithm"] = testssl_parsed["certificate_algorithm"]
+
+    # ---------------- Certificate History ----------------
+    enriched["certificate"]["certificate_history"] = get_certificate_history(domain)
+
+    # ---------------- Vulnerabilities ----------------
+    vulns = set(testssl_parsed.get("vulnerabilities", []))
+
+    # 1. Deprecated TLS/SSL versions supported
+    deprecated_tls = [v for v in enriched["supported"]["tls_versions"] if v in ["SSLv2", "SSLv3", "TLSv1.0", "TLSv1.1"]]
+    if deprecated_tls:
+        vulns.add(f"Deprecated TLS/SSL Version Supported ({', '.join(deprecated_tls)})")
+
+    # 2. Weak cipher suites enabled
+    if enriched["weak_ciphers"]:
+        vulns.add("Weak/Legacy Cipher Suites Enabled")
+
+    # 3. Lack of PFS
+    if not enriched["pfs_supported"]:
+        vulns.add("Perfect Forward Secrecy (PFS) Not Supported")
+
+    # 4. Weak Certificate signature algorithm (MD5/SHA1)
+    cert_sig = enriched["certificate"].get("signature_algorithm")
+    if cert_sig:
+        cert_sig_upper = cert_sig.upper()
+        if "MD5" in cert_sig_upper or ("SHA1" in cert_sig_upper and not "SHA256" in cert_sig_upper and not "SHA384" in cert_sig_upper and not "SHA512" in cert_sig_upper):
+            vulns.add("Weak Certificate Signature Algorithm (MD5/SHA-1)")
+    elif enriched["certificate"].get("raw_signature_algorithm"):
+        raw_sig_upper = enriched["certificate"]["raw_signature_algorithm"].upper()
+        if "MD5" in raw_sig_upper or ("SHA1" in raw_sig_upper and not "SHA256" in raw_sig_upper and not "SHA384" in raw_sig_upper and not "SHA512" in raw_sig_upper):
+            vulns.add("Weak Certificate Signature Algorithm (MD5/SHA-1)")
+
+    # 5. Weak RSA key size
+    cert_pk = enriched["certificate"].get("public_key") or {}
+    if cert_pk.get("type") == "RSA" and cert_pk.get("size") and cert_pk.get("size") < 2048:
+        vulns.add(f"Weak Certificate RSA Key Size ({cert_pk.get('size')} bits < 2048 bits)")
+
+    enriched["vulnerabilities"] = sorted(vulns)
 
     return enriched
