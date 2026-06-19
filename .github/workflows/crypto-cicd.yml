@@ -40,10 +40,8 @@ jobs:
     steps:
     - name: Stop service for clean deployment
       run: sudo pm2 stop crypto-api || true
-      
     - name: Force Cleanup with Sudo
       run: sudo rm -rf /home/ubuntu/crypto-runner/_work/crypto-service/crypto-service/*
-      
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
@@ -51,30 +49,20 @@ jobs:
 
     - name: Setup Virtual Environment & Tools
       run: |
-        # Navigate explicitly to ensure venv is built in the right root
-        cd /home/ubuntu/crypto-runner/_work/crypto-service/crypto-service
-        
         # 1. Create venv if it doesn't exist
         python3 -m venv venv
         
-        # 2. Install Python deps explicitly using the local pip binary
+        # 2. Install Python deps
         ./venv/bin/pip install --upgrade pip
         ./venv/bin/pip install -r requirements.txt
-        ./venv/bin/pip install uvicorn
         
-        # 3. Clone external tools ONLY if they don't exist
+        # 3. Clone external tools ONLY if they don't exist (prevents errors on re-deploy)
         [ -d "liboqs" ] || git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
         [ -d "oqs-provider" ] || git clone --depth 1 https://github.com/open-quantum-safe/oqs-provider.git
         [ -d "testssl.sh" ] || git clone --depth 1 https://github.com/drwetter/testssl.sh.git
 
     - name: Restart Service with PM2
       run: |
-        cd /home/ubuntu/crypto-runner/_work/crypto-service/crypto-service
-
-        # Standard restart if it exists. If not, start it by pointing to the venv's python interpreter module layer.
-        sudo pm2 restart crypto-api || sudo pm2 start ./venv/bin/python \
-          --name "crypto-api" \
-          --cwd "/home/ubuntu/crypto-runner/_work/crypto-service/crypto-service" \
-          -- -m uvicorn main:app --host 0.0.0.0 --port 8000
-          
+        # Restart the api if it exists, otherwise start it
+        sudo pm2 restart crypto-api || sudo pm2 start "./venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000" --name "crypto-api"
         sudo pm2 save
