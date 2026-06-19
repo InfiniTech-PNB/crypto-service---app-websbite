@@ -68,12 +68,12 @@ jobs:
         # Navigate explicitly to the workspace folder
         cd /home/ubuntu/crypto-runner/_work/crypto-service/crypto-service
 
-        # Try a standard restart. If that fails (or configuration is missing), run a safe, explicit start.
+        # Try a standard restart. If that fails, start it correctly using the double-dash (--) syntax for arguments.
         sudo pm2 restart crypto-api || sudo pm2 start ./venv/bin/uvicorn \
           --name "crypto-api" \
           --interpreter "none" \
           --cwd "/home/ubuntu/crypto-runner/_work/crypto-service/crypto-service" \
-          --args "main:app --host 0.0.0.0 --port 8000"
+          -- main:app --host 0.0.0.0 --port 8000
           
         # Save the process list so it persists system reboots
         sudo pm2 save
