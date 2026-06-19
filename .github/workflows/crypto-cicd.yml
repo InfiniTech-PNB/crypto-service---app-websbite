@@ -63,6 +63,12 @@ jobs:
 
     - name: Restart Service with PM2
       run: |
-        # Restart the api if it exists, otherwise start it
-        sudo pm2 restart crypto-api || sudo pm2 start "./venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000" --name "crypto-api"
+        cd /home/ubuntu/crypto-runner/_work/crypto-service/crypto-service
+
+        # Standard restart if it exists. If not, start it by pointing to the venv's python interpreter module layer.
+        sudo pm2 restart crypto-api || sudo pm2 start ./venv/bin/python \
+          --name "crypto-api" \
+          --cwd "/home/ubuntu/crypto-runner/_work/crypto-service/crypto-service" \
+          -- -m uvicorn main:app --host 0.0.0.0 --port 8000
+          
         sudo pm2 save
